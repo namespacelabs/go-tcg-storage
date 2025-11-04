@@ -174,7 +174,7 @@ type LockingSPMeta struct {
 }
 
 // Initialize WHAT?
-func Initialize(coreObj *core.Core, opts ...InitializeOpt) (*core.ControlSession, *LockingSPMeta, error) {
+func Initialize(coreObj *core.Core, opts ...InitializeOpt) (*LockingSPMeta, error) {
 	ic := initializeConfig{
 		MaxComPacketSizeOverride: core.DefaultMaxComPacketSize,
 		ReceiveRetries:           core.DefaultReceiveRetries,
@@ -189,22 +189,24 @@ func Initialize(coreObj *core.Core, opts ...InitializeOpt) (*core.ControlSession
 
 	comID, proto, err := core.FindComID(coreObj.DriveIntf, coreObj.Level0Discovery)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	controlSessionOpts := []core.ControlSessionOpt{
 		core.WithComID(comID),
 		core.WithMaxComPacketSize(ic.MaxComPacketSizeOverride),
 		core.WithReceiveTimeout(ic.ReceiveRetries, ic.ReceiveInterval),
+		core.WithNoReset(),
 	}
 
 	cs, err := core.NewControlSession(coreObj.DriveIntf, coreObj.Level0Discovery, controlSessionOpts...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create control session (comID 0x%04x): %v", comID, err)
+		return nil, fmt.Errorf("failed to create control session (comID 0x%04x): %v", comID, err)
 	}
+	defer cs.Close()
 
 	as, err := cs.NewSession(uid.AdminSP)
 	if err != nil {
-		return nil, nil, fmt.Errorf("admin session creation failed: %w", err)
+		return nil, fmt.Errorf("admin session creation failed: %w", err)
 	}
 	defer func() {
 		if err := as.Close(); err != nil {
@@ -218,26 +220,27 @@ func Initialize(coreObj *core.Core, opts ...InitializeOpt) (*core.ControlSession
 			continue
 		}
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		break
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("all authentications failed, last with: %w", err)
+		return nil, fmt.Errorf("all authentications failed, last with: %w", err)
 	}
 
 	if proto == core.ProtocolLevelEnterprise {
 		copy(lmeta.SPID[:], uid.EnterpriseLockingSP[:])
 		if err := initializeEnterprise(as, coreObj.Level0Discovery, &ic, lmeta); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	} else {
 		copy(lmeta.SPID[:], uid.LockingSP[:])
 		if err := initializeOpalFamily(as, coreObj.Level0Discovery, &ic, lmeta); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
-	return cs, lmeta, nil
+
+	return lmeta, nil
 }
 
 func initializeEnterprise(s *core.Session, d0 *core.Level0Discovery, ic *initializeConfig, lmeta *LockingSPMeta) error {
